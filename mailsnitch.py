@@ -5,6 +5,7 @@ Checks for open relays, VRFY enumeration, user enumeration via RCPT TO.
 """
 
 import argparse
+import os
 import socket
 import smtplib
 import sys
@@ -67,9 +68,14 @@ def vrfy_user(host, user, port=25, timeout=VRFY_TIMEOUT):
 def enumerate_users(host, userlist, port=25, max_workers=20):
     """Brute-force SMTP user enumeration via VRFY."""
     results = []
-    with open(userlist) if isinstance(userlist, str) and os.path.exists(userlist) else userlist as ul:
-        users = [l.strip() for l in ul if l.strip() and not l.startswith("#")]
-    
+    if isinstance(userlist, str) and os.path.exists(userlist):
+        with open(userlist) as f:
+            users = [l.strip() for l in f if l.strip() and not l.startswith("#")]
+    elif isinstance(userlist, list):
+        users = userlist
+    else:
+        return results
+
     with ThreadPoolExecutor(max_workers=max_workers) as ex:
         fut_map = {ex.submit(vrfy_user, host, u, port): u for u in users}
         for fut in as_completed(fut_map):
@@ -79,8 +85,6 @@ def enumerate_users(host, userlist, port=25, max_workers=20):
                 pass
     return [r for r in results if r[1] in (250, 252)]
 
-
-import os
 
 def main():
     parser = argparse.ArgumentParser(description="MailSnitch — SMTP recon tool")
