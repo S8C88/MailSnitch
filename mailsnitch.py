@@ -9,8 +9,6 @@ import os
 import re
 import socket
 import smtplib
-import sys
-import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 SMTP_BANNER_TIMEOUT = 5
