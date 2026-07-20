@@ -6,6 +6,7 @@ Checks for open relays, VRFY enumeration, user enumeration via RCPT TO.
 
 import argparse
 import os
+import re
 import socket
 import smtplib
 import sys
@@ -14,6 +15,40 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 SMTP_BANNER_TIMEOUT = 5
 VRFY_TIMEOUT = 5
+
+# Maximum file size for userlist files (CWE-770)
+MAX_USERLIST_SIZE = 10 * 1024 * 1024  # 10MB
+
+
+def _validate_host(host: str) -> str:
+    """Validate a hostname or IP address (CWE-20)."""
+    # Allow empty check
+    if not host or not host.strip():
+        raise ValueError("Host cannot be empty")
+    # Basic hostname pattern
+    if not re.match(r'^[\w.-]+$', host):
+        raise ValueError(f"Invalid host: {host}")
+    return host.strip()
+
+
+def _validate_port(port: int) -> int:
+    """Validate a port number (CWE-20)."""
+    port = int(port)
+    if port < 1 or port > 65535:
+        raise ValueError(f"Invalid port: {port} (must be 1-65535)")
+    return port
+
+
+def _validate_path(path: str) -> str:
+    """Validate a file path for reading (CWE-22)."""
+    resolved = os.path.realpath(path)
+    if not os.path.isfile(resolved):
+        raise FileNotFoundError(f"File not found: {resolved}")
+    # CWE-770: Check file size
+    file_size = os.path.getsize(resolved)
+    if file_size > MAX_USERLIST_SIZE:
+        raise ValueError(f"File too large ({file_size} bytes > {MAX_USERLIST_SIZE} max)")
+    return resolved
 
 
 def check_smtp_banner(host, port=25, timeout=SMTP_BANNER_TIMEOUT):
@@ -37,7 +72,7 @@ def check_open_relay(host, port=25, from_addr="test@example.com", to_addr="test@
         try:
             s.starttls()
             s.ehlo()
-        except:
+        except smtplib.SMTPException:  # CWE-703: TLS not supported, continue
             pass
         s.mail(from_addr)
         code, msg = s.rcpt(to_addr)
@@ -69,7 +104,9 @@ def enumerate_users(host, userlist, port=25, max_workers=20):
     """Brute-force SMTP user enumeration via VRFY."""
     results = []
     if isinstance(userlist, str) and os.path.exists(userlist):
-        with open(userlist) as f:
+        # CWE-20/CWE-22: Validate path before reading
+        validated = _validate_path(userlist)
+        with open(validated) as f:
             users = [l.strip() for l in f if l.strip() and not l.startswith("#")]
     elif isinstance(userlist, list):
         users = userlist
@@ -81,7 +118,7 @@ def enumerate_users(host, userlist, port=25, max_workers=20):
         for fut in as_completed(fut_map):
             try:
                 results.append(fut.result())
-            except:
+            except Exception:  # CWE-703: skip individual VRFY failures
                 pass
     return [r for r in results if r[1] in (250, 252)]
 
@@ -96,6 +133,10 @@ def main():
     parser.add_argument("--enumerate", help="File with usernames to VRFY enumerate")
     parser.add_argument("--timeout", type=int, default=10, help="Connection timeout")
     args = parser.parse_args()
+
+    # CWE-20: Validate inputs
+    args.target = _validate_host(args.target)
+    args.port = _validate_port(args.port)
 
     if args.banner:
         print(f"[*] Checking SMTP banner on {args.target}:{args.port}")
